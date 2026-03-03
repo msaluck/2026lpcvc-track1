@@ -1,0 +1,19 @@
+# Core ML
+torch>=2.0.0
+torchvision>=0.15.0
+transformers>=4.40.0
+open_clip_torch>=2.24.0
+
+# Data Processing
+pillow>=10.0.0
+datasets>=2.19.0
+tqdm>=4.66.0
+scikit-learn>=1.4.0
+
+# Development
+pytest>=8.0.0
+black>=24.0.0
+
+# Export
+onnx>=1.15.0
+onnxruntime>=1.17.0
