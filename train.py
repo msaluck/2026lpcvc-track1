@@ -106,27 +106,33 @@ print("Total samples:", len(image_paths))
 
 # temporary subset for faster training during development (remove for full training)
 OVERFIT_SIZE = 120
-image_paths = image_paths[:OVERFIT_SIZE]
-texts = texts[:OVERFIT_SIZE]
+# image_paths = image_paths[:OVERFIT_SIZE]
+# texts = texts[:OVERFIT_SIZE]
 
-# image_paths, texts = load_coco_captions(
-#     image_root="datasets/train2017",
-#     annotation_file="datasets/annotations/captions_train2017.json"
-# )
+# ============================================================
+# TRAIN & VALIDATION SPLIT
+# ============================================================
 
-dataset = RetrievalDataset(image_paths, texts, tokenizer)
+import random
+random.seed(42)
 
-# Semantic batch sampler groups similar samples together to improve convergence
-# sampler = SemanticBatchSampler(dataset, batch_size=args.batch_size)
+# Shuffle and split 90/10
+combined = list(zip(image_paths, texts))
+random.shuffle(combined)
+image_paths, texts = zip(*combined)
 
-# dataloader = DataLoader(
-#     dataset,
-#     batch_sampler=sampler,
-#     num_workers=8,     # Increase for 20-core CPU
-#     pin_memory=True,
-#     persistent_workers=True, # Prevent worker respawn overhead
-#     prefetch_factor=2  # Buffer batches ahead of time
-# )
+split_idx = int(0.9 * len(image_paths))
+
+train_images = image_paths[:split_idx]
+train_texts = texts[:split_idx]
+
+val_images = image_paths[split_idx:]
+val_texts = texts[split_idx:]
+
+print(f"Training samples: {len(train_images)}")
+print(f"Validation samples: {len(val_images)}")
+
+dataset = RetrievalDataset(train_images, train_texts, tokenizer)
 
 # normal random batching (no semantic grouping)
 dataloader = DataLoader(
@@ -142,10 +148,6 @@ dataloader = DataLoader(
 # --------------------------
 # LOAD VALIDATION (COCO VAL)
 # --------------------------
-
-# IMPORTANT: For overfitting test, validation MUST be the SAME as training
-val_images, val_texts = image_paths, texts
-print(f"Validation set (OVERFIT): {len(val_images)}")
 
 val_dataset = RetrievalDataset(val_images, val_texts, tokenizer)
 
@@ -178,7 +180,8 @@ model = XRClip(embed_dim=256).to(device)
 
 if torch.cuda.get_device_capability()[0] >= 7:
     print("Compiling model with torch.compile...")
-    model = torch.compile(model)
+    # model = torch.compile(model) # DISABLED: Compilation overhead may be too high for frequent small batches or debug runs.
+    # Re-enable for long production runs if memory allows.
 
 criterion = ClipLoss()
 
