@@ -8,6 +8,9 @@ import os
 from dataset_loader import load_coco_captions, load_flickr30k
 
 torch.backends.cudnn.benchmark = True
+# TF32 on Ampere GPUs (A100/A10/3090)
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
 
 from tqdm import tqdm
 
@@ -30,6 +33,9 @@ parser.add_argument("--lr", type=float, default=3e-4)
 parser.add_argument("--use_distill", action="store_true")
 parser.add_argument("--save_path", type=str, default="xr_clip_s256.pth")
 parser.add_argument("--accum_steps", type=int, default=1, help="Gradient accumulation steps")
+# Resume training from checkpoint
+parser.add_argument("--resume", type=str, default="", help="Path to checkpoint to resume from")
+parser.add_argument("--val_every", type=int, default=1, help="Validation frequency (epochs)")
 
 args = parser.parse_args()
 
@@ -123,8 +129,10 @@ dataloader = DataLoader(
     dataset,
     batch_size=args.batch_size,
     shuffle=True,       # Shuffle ON for training
-    num_workers=0,      # Simple
-    pin_memory=False
+    num_workers=2,      # 2 workers is safe on Colab
+    pin_memory=True,
+    prefetch_factor=2,
+    persistent_workers=True
 )
 
 # --------------------------
@@ -163,6 +171,11 @@ val_loader = DataLoader(
 # ============================================================
 
 model = XRClip(embed_dim=256).to(device)
+
+if torch.cuda.get_device_capability()[0] >= 7:
+    print("Compiling model with torch.compile...")
+    model = torch.compile(model)
+
 criterion = ClipLoss()
 
 # # 🔒 Freeze text encoder (Phase 1 debugging)
@@ -199,6 +212,10 @@ if args.use_distill:
     teacher_model.to(device)
     teacher_model.eval()
     teacher_model.requires_grad_(False)
+    
+    # Compile teacher for faster inference
+    if torch.cuda.get_device_capability()[0] >= 7:
+        teacher_model = torch.compile(teacher_model)
 
     teacher_proj = nn.Linear(512, 256).to(device)
 else:
@@ -240,7 +257,7 @@ def evaluate_recall(model, dataloader, device):
     all_image_emb = []
     all_text_emb = []
 
-    with torch.no_grad():
+    with torch.inference_mode():
         for images, text_inputs in dataloader:
 
             images = images.to(device)
@@ -271,16 +288,45 @@ def evaluate_recall(model, dataloader, device):
 # ============================================================
 
 scaler = torch.amp.GradScaler('cuda')
-best_recall = 0
 
-for epoch in range(args.epochs):
+# ============================================================
+# RESUME TRAINING
+# ============================================================
+best_recall = 0.0
+start_epoch = 0
+
+if args.resume:
+    if os.path.isfile(args.resume):
+        print(f"=> loading checkpoint '{args.resume}'")
+        checkpoint = torch.load(args.resume, map_location=device)
+        
+        # If it's just a state dict (old format), we can't resume epoch/optimizer
+        if 'epoch' not in checkpoint:
+            print("Warning: Checkpoint appears to be model weights only. Starting from epoch 0.")
+            model_to_load = model._orig_mod if hasattr(model, "_orig_mod") else model
+            model_to_load.load_state_dict(checkpoint)
+        else:
+            start_epoch = checkpoint['epoch']
+            best_recall = checkpoint.get('best_recall', 0.0)
+            
+            model_to_load = model._orig_mod if hasattr(model, "_orig_mod") else model
+            model_to_load.load_state_dict(checkpoint['state_dict'])
+            
+            optimizer.load_state_dict(checkpoint['optimizer'])
+            scaler.load_state_dict(checkpoint['scaler'])
+            
+            print(f"=> loaded checkpoint '{args.resume}' (epoch {checkpoint['epoch']})")
+    else:
+        print(f"=> no checkpoint found at '{args.resume}'")
+
+for epoch in range(start_epoch, args.epochs):
 
     model.train()
     total_loss = 0
 
     optimizer.zero_grad(set_to_none=True)
 
-    loop = tqdm(dataloader, desc=f"Epoch [{epoch+1}/{args.epochs}]")
+    loop = tqdm(dataloader, desc=f"Epoch [{epoch+1}/{args.epochs}]", mininterval=10.0)
     for step, (images, text_inputs) in enumerate(loop):
 
         images = images.to(device, non_blocking=True)
@@ -327,18 +373,42 @@ for epoch in range(args.epochs):
     # 🔍 Quick Sanity Check
     print("Current logit_scale (exp):", model.logit_scale.exp().item())
 
-    # Evaluate recall on validation set
-    val_recall = evaluate_recall(model, val_loader, device)
-    print(f"Validation Recall@10: {val_recall:.4f}")
+    # Evaluate recall on validation set (only every N epochs)
+    if (epoch + 1) % args.val_every == 0:
+        print(f"Running Validation (Epoch {epoch+1})...")
+        val_recall = evaluate_recall(model, val_loader, device)
+        print(f"Validation Recall@10: {val_recall:.4f}")
 
-    if val_recall > best_recall:
-        best_recall = val_recall
-        torch.save(model.state_dict(), "best_model.pth")
-        print(f"New best recall: {best_recall:.4f} (model saved)")
+        if val_recall > best_recall:
+            best_recall = val_recall
+            # Save raw model state dict (uncompile if necessary, usually handled)
+            # Use model._orig_mod if compiled to save clean weights
+            save_model = model._orig_mod if hasattr(model, "_orig_mod") else model
+            state = {
+                'epoch': epoch + 1,
+                'state_dict': save_model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'scaler': scaler.state_dict(),
+                'best_recall': best_recall,
+            }
+            # Save best_model.pth adjacent to the final save_path
+            best_path = os.path.join(os.path.dirname(args.save_path), "best_model.pth")
+            torch.save(state, best_path)
+            print(f"New best recall: {best_recall:.4f} (checkpoint saved to {best_path})")
+    else:
+        print(f"Skipping validation (Next: Epoch {epoch + 1 + args.val_every - (epoch+1)%args.val_every})")
 
 # ============================================================
-# SAVE MODEL
+# SAVE FINAL MODEL
 # ============================================================
 
-torch.save(model.state_dict(), args.save_path)
-print("Model saved to:", args.save_path)
+save_model = model._orig_mod if hasattr(model, "_orig_mod") else model
+state = {
+    'epoch': args.epochs,
+    'state_dict': save_model.state_dict(),
+    'optimizer': optimizer.state_dict(),
+    'scaler': scaler.state_dict(),
+    'best_recall': best_recall,
+}
+torch.save(state, args.save_path)
+print("Final model saved to:", args.save_path)
