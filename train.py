@@ -5,8 +5,11 @@ from transformers import CLIPTokenizer
 import open_clip
 import argparse
 import os
+import logging
 from dataset_loader import load_coco_captions, load_flickr30k
 
+# Suppress annoying inductor/triton warnings
+logging.getLogger("torch._inductor.utils").setLevel(logging.ERROR)
 torch.backends.cudnn.benchmark = True
 # TF32 on Ampere GPUs (A100/A10/3090)
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -36,6 +39,7 @@ parser.add_argument("--accum_steps", type=int, default=1, help="Gradient accumul
 # Resume training from checkpoint
 parser.add_argument("--resume", type=str, default="", help="Path to checkpoint to resume from")
 parser.add_argument("--val_every", type=int, default=1, help="Validation frequency (epochs)")
+parser.add_argument("--patience", type=int, default=10, help="Early stopping patience (validation checks)")
 
 args = parser.parse_args()
 
@@ -294,6 +298,7 @@ scaler = torch.amp.GradScaler('cuda')
 # ============================================================
 best_recall = 0.0
 start_epoch = 0
+patience_counter = 0  # Track early stopping
 
 if args.resume:
     if os.path.isfile(args.resume):
@@ -395,6 +400,13 @@ for epoch in range(start_epoch, args.epochs):
             best_path = os.path.join(os.path.dirname(args.save_path), "best_model.pth")
             torch.save(state, best_path)
             print(f"New best recall: {best_recall:.4f} (checkpoint saved to {best_path})")
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            print(f"No improvement in recall. Patience: {patience_counter}/{args.patience}")
+            if patience_counter >= args.patience:
+                print(f"Early stopping triggered! Model has not improved for {args.patience} validation checks.")
+                break
     else:
         print(f"Skipping validation (Next: Epoch {epoch + 1 + args.val_every - (epoch+1)%args.val_every})")
 
