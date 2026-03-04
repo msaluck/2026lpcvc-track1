@@ -41,6 +41,11 @@ parser.add_argument("--resume", type=str, default="", help="Path to checkpoint t
 parser.add_argument("--val_every", type=int, default=1, help="Validation frequency (epochs)")
 parser.add_argument("--patience", type=int, default=10, help="Early stopping patience (validation checks)")
 
+# Dataset paths
+parser.add_argument("--coco_img_path", type=str, default="datasets/train2017", help="Path to COCO images")
+parser.add_argument("--coco_ann_path", type=str, default="datasets/annotations/captions_train2017.json", help="Path to COCO annotations")
+parser.add_argument("--flickr_root", type=str, default="datasets", help="Root directory for Flickr images/cache")
+
 args = parser.parse_args()
 
 # ============================================================
@@ -68,14 +73,9 @@ tokenizer.add_special_tokens({'cls_token': tokenizer.eos_token})
 # --------------------------
 # LOAD COCO
 # --------------------------
-coco_images, coco_texts = load_coco_captions(
-    image_root="datasets/train2017",
-    annotation_file="datasets/annotations/captions_train2017.json"
-)
-
 coco_images_all, coco_texts_all = load_coco_captions(
-    image_root="datasets/train2017",
-    annotation_file="datasets/annotations/captions_train2017.json"
+    image_root=args.coco_img_path,
+    annotation_file=args.coco_ann_path
 )
 
 # Keep only first caption per image
@@ -92,7 +92,7 @@ for img, txt in zip(coco_images_all, coco_texts_all):
 # --------------------------
 # LOAD FLICKR
 # --------------------------
-flickr_images, flickr_texts = load_flickr30k()
+flickr_images, flickr_texts = load_flickr30k(root_dir=args.flickr_root)
 
 # --------------------------
 # MERGE

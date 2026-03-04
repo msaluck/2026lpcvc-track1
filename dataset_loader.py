@@ -36,9 +36,9 @@ def load_coco_captions(image_root, annotation_file):
 # FLICKR30K LOADER
 # =========================
 
-def load_flickr30k():
-    images_dir = "datasets/flickr_images"
-    cache_file = "datasets/flickr30k_local_cache.json"
+def load_flickr30k(root_dir="datasets"):
+    images_dir = os.path.join(root_dir, "flickr_images")
+    cache_file = os.path.join(root_dir, "flickr30k_local_cache.json")
 
     # Optimization: If we have already processed the dataset, load from local JSON
     # This prevents re-downloading/re-processing from Hugging Face on every run (critical for Colab)
