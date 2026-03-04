@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchvision.models import mobilenet_v3_large, MobileNet_V3_Large_Weights
+from torchvision.models import mobilenet_v3_small, MobileNet_V3_Small_Weights
 import torchvision.transforms as transforms
 from PIL import Image
 from torch.utils.data import Dataset
@@ -49,33 +49,33 @@ class FakeQuant(nn.Module):
 
 class ImageEncoder(nn.Module):
     """
-    Image Encoder based on MobileNetV3-Large.
+    Image Encoder based on MobileNetV3-Small.
     
     Architecture:
-        1. Backbone: MobileNetV3-Large (IMAGENET1K_V1 weights)
-           Output: (B, 960, 7, 7)
+        1. Backbone: MobileNetV3-Small (IMAGENET1K_V1 weights)
+           Output: (B, 576, 7, 7)
         2. Pooling: AdaptiveAvgPool2d((1, 1))
-           Output: (B, 960, 1, 1) -> Flatten -> (B, 960)
+           Output: (B, 576, 1, 1) -> Flatten -> (B, 576)
         3. Projection Head:
-           Linear(960 -> 512) -> GELU -> Linear(512 -> embed_dim)
+           Linear(576 -> 512) -> GELU -> Linear(512 -> embed_dim)
         4. Normalization and Quantization:
            LayerNorm -> FakeQuant -> L2 Normalize (features on unit hypersphere)
 
     This architecture is chosen for low-power inference latency.
     """
-    def __init__(self, embed_dim=256):
+    def __init__(self, embed_dim=224):
         super().__init__()
 
-        backbone = mobilenet_v3_large(
-            weights=MobileNet_V3_Large_Weights.IMAGENET1K_V1
+        backbone = mobilenet_v3_small(
+            weights=MobileNet_V3_Small_Weights.IMAGENET1K_V1
         )
 
         self.features = backbone.features
         self.pool = nn.AdaptiveAvgPool2d((1, 1))
         
-        # Projection Head: Projects 960-dim backbone features into shared embedding space
+        # Projection Head: Projects 576-dim backbone features into shared embedding space
         self.proj = nn.Sequential(
-            nn.Linear(960, 512),
+            nn.Linear(576, 512),
             nn.GELU(),
             nn.Linear(512, embed_dim)
         )
@@ -93,11 +93,11 @@ class ImageEncoder(nn.Module):
             torch.Tensor: Normalized image embeddings (B, embed_dim)
         """
         # Backbone Feature Extraction
-        x = self.features(x)         # (B, 960, 7, 7)
+        x = self.features(x)         # (B, 576, 7, 7)
         
         # Global Average Pooling
-        x = self.pool(x)             # (B, 960, 1, 1)
-        x = torch.flatten(x, 1)      # (B, 960)
+        x = self.pool(x)             # (B, 576, 1, 1)
+        x = torch.flatten(x, 1)      # (B, 576)
 
         # Projection to Joint Embedding Space
         x = self.proj(x)             # (B, embed_dim)
@@ -131,9 +131,9 @@ class XRClip(nn.Module):
         The competition requires low-power inference on images.
         We freeze the heavy text encoder and only train a lightweight image encoder + projection.
         This allows high-quality text embeddings (from CLIP) without the training cost.
-        A small projection layer (text_proj) adapts the 512-dim CLIP space to our 256-dim space.
+        A small projection layer (text_proj) adapts the 512-dim CLIP space to our 224-dim space.
     """
-    def __init__(self, embed_dim=256, freeze_text=True):
+    def __init__(self, embed_dim=224, freeze_text=True):
         super().__init__()
 
         self.image_encoder = ImageEncoder(embed_dim)
@@ -234,8 +234,8 @@ class XRClip(nn.Module):
             text_input (torch.Tensor): (B, 77)
             
         Returns:
-            image_emb (torch.Tensor): (B, 256)
-            text_emb (torch.Tensor): (B, 256)
+            image_emb (torch.Tensor): (B, embed_dim)
+            text_emb (torch.Tensor): (B, embed_dim)
         """
         # Encode Image (Trainable)
         image_emb = self.image_encoder(image)
@@ -245,7 +245,7 @@ class XRClip(nn.Module):
             text_features = self.forward_text(text_input)
 
         # Project Text to Joint Space
-        text_emb = self.text_proj(text_features)  # 512 -> 256
+        text_emb = self.text_proj(text_features)  # 512 -> embed_dim
         text_emb = self.text_fake_quant(text_emb)
         text_emb = self.text_norm(text_emb)
         text_emb = F.normalize(text_emb, dim=-1)

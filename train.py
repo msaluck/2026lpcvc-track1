@@ -48,9 +48,9 @@ parser = argparse.ArgumentParser()
 
 parser.add_argument("--epochs", type=int, default=20)
 parser.add_argument("--batch_size", type=int, default=32)
-parser.add_argument("--lr", type=float, default=3e-4)
+parser.add_argument("--lr", type=float, default=3e-4) # Reduced for fine-tuning
 parser.add_argument("--use_distill", action="store_true")
-parser.add_argument("--save_path", type=str, default="xr_clip_s256.pth")
+parser.add_argument("--save_path", type=str, default="xr_clip_s224.pth")
 parser.add_argument("--accum_steps", type=int, default=1, help="Gradient accumulation steps")
 # Resume training from checkpoint
 parser.add_argument("--resume", type=str, default="", help="Path to checkpoint to resume from")
@@ -187,7 +187,7 @@ val_loader = DataLoader(
 # MODEL
 # ============================================================
 
-model = XRClip(embed_dim=256).to(device)
+model = XRClip(embed_dim=224).to(device)
 
 if torch.cuda.get_device_capability()[0] >= 7:
     print("Compiling model with torch.compile...")
@@ -223,7 +223,7 @@ if args.use_distill:
     if torch.cuda.get_device_capability()[0] >= 7:
         teacher_model = torch.compile(teacher_model)
 
-    teacher_proj = nn.Linear(512, 256).to(device)
+    teacher_proj = nn.Linear(512, 224).to(device)
 else:
     # Use distillation by default if not specified? Or just remove this else
     # Actually, let's DISABLE distillation for now to debug convergence
@@ -384,8 +384,9 @@ for epoch in range(start_epoch, args.epochs):
                     teacher_img = teacher_model.encode_image(images)
                     teacher_txt = teacher_model.encode_text(text_inputs)
 
-                teacher_img = teacher_proj(teacher_img)
-                teacher_txt = teacher_proj(teacher_txt)
+                # Project 512d -> 224d
+                teacher_img = teacher_proj(teacher_img) # (B, 512) -> (B, 224)
+                teacher_txt = teacher_proj(teacher_txt) # (B, 512) -> (B, 224)
 
                 img_distill = distillation_loss(image_emb, teacher_img)
                 txt_distill = distillation_loss(text_emb, teacher_txt)
