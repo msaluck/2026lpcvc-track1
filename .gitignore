@@ -37,6 +37,7 @@ lpcvc-track1-env/
 
 # Project Specific
 datasets/
+models/
 xr_clip_s256.pth
 best_model.pth
 
