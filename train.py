@@ -217,8 +217,9 @@ def evaluate_recall(model, dataloader, device):
     all_image_emb = []
     all_text_emb = []
 
-    with torch.inference_mode():
-        for images, text_inputs in dataloader:
+    print("Collecting validation embeddings...")
+    with torch.no_grad():
+        for images, text_inputs in tqdm(dataloader, desc="Inference"):
 
             images = images.to(device)
             text_inputs = text_inputs.to(device)
@@ -226,22 +227,56 @@ def evaluate_recall(model, dataloader, device):
             with torch.amp.autocast('cuda'):
                 image_emb, text_emb = model(images, text_inputs)
 
-            all_image_emb.append(image_emb)
-            all_text_emb.append(text_emb)
+            all_image_emb.append(image_emb.cpu())
+            all_text_emb.append(text_emb.cpu())
 
     image_emb = torch.cat(all_image_emb)
     text_emb = torch.cat(all_text_emb)
+    
+    del all_image_emb, all_text_emb
+    torch.cuda.empty_cache()
 
-    # Similarity matrix
-    sims = image_emb @ text_emb.T
+    # Move to device for matrix ops
+    image_emb = image_emb.to(device)
+    text_emb = text_emb.to(device)
 
-    ranks = sims.argsort(dim=-1, descending=True)
+    num_samples = len(image_emb)
+    
+    # Batch size for similarity calculation to avoid OOM
+    # Matrix size: batch_size * num_samples
+    # 1000 * 27721 * 4 bytes approx 110 MB memory per batch
+    batch_size = 1000 
+    
+    correct = 0
+    k = 10
+    
+    print(f"Computing Recall@{k} for {num_samples} samples (Batched)...")
 
-    correct = torch.arange(len(image_emb), device=image_emb.device).unsqueeze(1)
+    for i in range(0, num_samples, batch_size):
+        end = min(i + batch_size, num_samples)
+        
+        # Batch of query images [B, D]
+        img_batch = image_emb[i:end]
+        
+        # Compute similarity against ALL texts [B, N]
+        sims = img_batch @ text_emb.T
+        
+        # Get top k indices [B, K]
+        # topk is much more memory efficient than argsort for small k
+        _, topk_indices = sims.topk(k, dim=1)
+        
+        # Ground truth indices for this batch
+        # The correct match for image[x] is text[x] (global index)
+        targets = torch.arange(i, end, device=device).unsqueeze(1) 
+        
+        # Check matches
+        hits = topk_indices.eq(targets).any(dim=1).sum().item()
+        correct += hits
 
-    recall = (ranks[:, :10] == correct).any(dim=1).float().mean()
+    recall = correct / num_samples
+    print(f"Recall@{k}: {recall:.4f}")
 
-    return recall.item()
+    return recall
 
 # ============================================================
 # TRAINING LOOP
