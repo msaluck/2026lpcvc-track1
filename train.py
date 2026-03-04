@@ -1,3 +1,19 @@
+"""
+LPCVC 2026 Track 1 - Training Script (train.py)
+
+This script implements the training pipeline for the XRClip model.
+It handles:
+1. Data Loading: COCO (Images + Captions) and Flickr30k.
+2. Model Initialization: MobileNetV3 Image Encoder + Distilled CLIP Text Encoder.
+3. Mixed Precision Training: Uses torch.cuda.amp (Automatic Mixed Precision).
+4. Validation: Computes Recall@10 on a held-out validation set.
+5. Checkpointing: Saves best models based on validation recall.
+
+Key Features:
+- Gradient Accumulation: Simulates larger batch sizes.
+- Distillation: Optional distillation from a frozen CLIP teacher (ViT-B-32).
+- Dynamic Caching: Caches Flickr30k data to avoid re-downloads.
+"""
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -104,10 +120,18 @@ texts = coco_texts + flickr_texts
 
 print("Total samples:", len(image_paths))
 
-# temporary subset for faster training during development (remove for full training)
-OVERFIT_SIZE = 120
-# image_paths = image_paths[:OVERFIT_SIZE]
-# texts = texts[:OVERFIT_SIZE]
+# ============================================================
+# DEBUGGING CONFIGURATION (Overfit on small amount of data)
+# ============================================================
+
+# Use this to verify the training loop works (loss should drop quickly on 100 samples)
+# Set to None for FULL TRAINING on the entire dataset.
+OVERFIT_SIZE = None
+
+if OVERFIT_SIZE is not None:
+    print(f"⚠️ WARNING: Overfitting on first {OVERFIT_SIZE} samples only!")
+    image_paths = image_paths[:OVERFIT_SIZE]
+    texts = texts[:OVERFIT_SIZE]
 
 # ============================================================
 # TRAIN & VALIDATION SPLIT
@@ -207,11 +231,29 @@ else:
     args.use_distill = False
 
 # ============================================================
-# RECALL@10 EVALUATION FUNCTION
+# EVALUATION: RECALL@K
 # ============================================================
 
 def evaluate_recall(model, dataloader, device):
-
+    """
+    Computes Recall@K (K=10) on the validation set.
+    
+    Metric Definition: 
+    Given a query image, we rank all validation captions by cosine similarity.
+    Recall@K is 1.0 if the correct caption is in the top K predictions.
+    
+    Implementation:
+    - Batched matrix multiplication to avoid OOM errors on large validation sets.
+    - Uses specific memory cleanup (del, empty_cache) to run on T4 GPUs.
+    
+    Args:
+        model: The XRClip model being evaluated.
+        dataloader: Validation DataLoader.
+        device: CUDA device.
+        
+    Returns:
+        float: The mean Recall@10 score [0.0 - 1.0].
+    """
     model.eval()
 
     all_image_emb = []
