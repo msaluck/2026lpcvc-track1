@@ -163,19 +163,6 @@ val_loader = DataLoader(
 # MODEL
 # ============================================================
 
-# model = XRClip(embed_dim=256).to(device)
-# criterion = ClipLoss()
-
-# optimizer = torch.optim.AdamW(
-#     model.parameters(),
-#     lr=args.lr,
-#     weight_decay=1e-4
-# )
-
-# ============================================================
-# MODEL
-# ============================================================
-
 model = XRClip(embed_dim=256).to(device)
 
 if torch.cuda.get_device_capability()[0] >= 7:
@@ -184,18 +171,6 @@ if torch.cuda.get_device_capability()[0] >= 7:
     # Re-enable for long production runs if memory allows.
 
 criterion = ClipLoss()
-
-# # 🔒 Freeze text encoder (Phase 1 debugging)
-# for p in model.text_encoder.parameters():
-#     p.requires_grad = False
-
-# print("Text encoder frozen (Phase 1)")
-
-# optimizer = torch.optim.AdamW(
-#     filter(lambda p: p.requires_grad, model.parameters()),
-#     lr=args.lr,
-#     weight_decay=1e-4
-# )
 
 optimizer = torch.optim.AdamW(
     model.parameters(),
@@ -230,28 +205,6 @@ else:
     # Actually, let's DISABLE distillation for now to debug convergence
     print("Distillation DISABLED for debugging (Standard CLIP Loss only)")
     args.use_distill = False
-    
-    # teacher_model, _, _ = open_clip.create_model_and_transforms(
-    #     "ViT-B-32",
-    #     pretrained="openai"
-    # )
-    # ...
-# else:
-#     # Use distillation by default if not specified? Or just remove this else
-#     # Actually, let's FORCE distillation for now to debug convergence
-#     print("Distillation FORCED (Recommended for training from scratch)")
-#     args.use_distill = True
-    
-#     teacher_model, _, _ = open_clip.create_model_and_transforms(
-#         "ViT-B-32",
-#         pretrained="openai"
-#     )
-
-#     teacher_model.to(device)
-#     teacher_model.eval()
-#     teacher_model.requires_grad_(False)
-
-#     teacher_proj = nn.Linear(512, 256).to(device)
 
 # ============================================================
 # RECALL@10 EVALUATION FUNCTION
